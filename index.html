@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TUNZY-MD Web Pair</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 TUNZY-MD Web Pair</h1>
+            <p class="subtitle">Pair your WhatsApp with TUNZY-MD Bot</p>
+        </header>
+
+        <div class="warning-box">
+            ⚠️ <strong>IMPORTANT SECURITY NOTICE:</strong> 
+            Never share your <code>creds.json</code> file with anyone. 
+            It contains sensitive authentication data that gives full access to your WhatsApp account.
+        </div>
+
+        <main>
+            <div class="pair-section">
+                <h2>🔗 Generate Pairing Code</h2>
+                
+                <div class="input-group">
+                    <label for="phoneNumber">Phone Number (with country code):</label>
+                    <input type="text" id="phoneNumber" placeholder="+1234567890" required>
+                    <small>Format: +[country code][number] (e.g., +2349012345678)</small>
+                </div>
+
+                <div class="button-group">
+                    <button id="generateQRBtn" class="btn primary">Generate QR Code</button>
+                    <button id="generateCodeBtn" class="btn secondary">Generate Pairing Code</button>
+                    <button id="downloadCredsBtn" class="btn download">Download creds.json</button>
+                </div>
+
+                <div class="result-container">
+                    <div id="qrContainer" class="hidden">
+                        <h3>📱 Scan QR Code</h3>
+                        <div id="qrcode"></div>
+                        <p class="qr-instruction">Open WhatsApp → Settings → Linked Devices → Link a Device → Scan QR Code</p>
+                    </div>
+
+                    <div id="codeContainer" class="hidden">
+                        <h3>🔢 Pairing Code</h3>
+                        <div class="code-display">
+                            <code id="pairingCode">Loading...</code>
+                            <button id="copyCodeBtn" class="btn copy">📋 Copy</button>
+                        </div>
+                        <p class="code-instruction">Use this code when prompted by TUNZY-MD bot</p>
+                    </div>
+
+                    <div id="credsInfo" class="hidden">
+                        <h3>📁 creds.json File</h3>
+                        <div class="file-info">
+                            <p>Your <code>creds.json</code> file has been generated. Keep it safe!</p>
+                            <div class="security-tips">
+                                <strong>Security Tips:</strong>
+                                <ul>
+                                    <li>❌ Never share this file publicly</li>
+                                    <li>❌ Don't upload to GitHub or public repositories</li>
+                                    <li>✅ Store in a secure location</li>
+                                    <li>✅ Use .gitignore to exclude it from version control</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tutorial-section">
+                <h2>🎥 Video Tutorial</h2>
+                <div class="tutorial-placeholder">
+                    <!-- Space for YouTube tutorial video -->
+                    <div class="video-placeholder">
+                        <p>📹 YouTube tutorial coming soon!</p>
+                        <p><em>You can add your tutorial video here later</em></p>
+                        <!-- Space for YouTube embed -->
+                        <div id="youtubeEmbed">
+                            <!-- Add your YouTube embed code here when ready -->
+                        </div>
+                    </div>
+                    <p class="note">Note: I'll create a detailed tutorial video showing the complete pairing process.</p>
+                </div>
+            </div>
+
+            <div class="instructions">
+                <h2>📋 How to Use</h2>
+                <ol>
+                    <li>Enter your WhatsApp phone number with country code</li>
+                    <li>Click "Generate QR Code" or "Generate Pairing Code"</li>
+                    <li>Scan the QR code OR use the pairing code</li>
+                    <li>Download and save your <code>creds.json</code> file securely</li>
+                    <li>Place <code>creds.json</code> in your TUNZY-MD bot directory</li>
+                    <li>Restart your bot with the new credentials</li>
+                </ol>
+            </div>
+        </main>
+
+        <footer>
+            <p>Made for TUNZY-MD Bot | ⚠️ Keep your credentials safe!</p>
+            <p class="github-link">
+                <a href="https://github.com/tunzy-shop/TUNZY-MD" target="_blank">GitHub Repository</a>
+            </p>
+        </footer>
+    </div>
+
+    <div id="notification" class="notification hidden"></div>
+
+    <script src="script.js"></script>
+</body>
+</html>
