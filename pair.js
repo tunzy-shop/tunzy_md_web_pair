@@ -1,8 +1,8 @@
 import express from 'express';
 import fs from 'fs';
 import pino from 'pino';
-import { makeWASocket, useMultiFileAuthState, delay, makeCacheableSignalKeyStore, Browsers, jidNormalizedUser, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
-import pn from 'awesome-phonenumber';
+import qrcode from 'qrcode';
+import { makeWASocket, useMultiFileAuthState, delay, makeCacheableSignalKeyStore, Browsers, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
 
 const router = express.Router();
 
@@ -16,35 +16,27 @@ function removeFile(FilePath) {
     }
 }
 
+// Store active connections
+const activeConnections = new Map();
+
 router.get('/', async (req, res) => {
-    let num = req.query.number;
-    let dirs = './' + (num || `session`);
+    const sessionId = req.query.sessionId || 'default';
+    const dirs = `./sessions/${sessionId}`;
 
     // Remove existing session if present
-    await removeFile(dirs);
-
-    // Clean the phone number - remove any non-digit characters
-    num = num.replace(/[^0-9]/g, '');
-
-    // Validate the phone number using awesome-phonenumber
-    const phone = pn('+' + num);
-    if (!phone.isValid()) {
-        if (!res.headersSent) {
-            return res.status(400).send({ code: 'Invalid phone number. Please enter your full international number (e.g., 15551234567 for US, 447911123456 for UK, 84987654321 for Vietnam, etc.) without + or spaces.' });
-        }
-        return;
+    if (fs.existsSync(dirs)) {
+        await removeFile(dirs);
     }
-    // Use the international number format (E.164, without '+')
-    num = phone.getNumber('e164').replace('+', '');
 
-    let botInstance; // Store bot instance globally for this request
+    // Create session directory
+    fs.mkdirSync(dirs, { recursive: true });
 
     async function initiateSession() {
         const { state, saveCreds } = await useMultiFileAuthState(dirs);
 
         try {
-            const { version, isLatest } = await fetchLatestBaileysVersion();
-            botInstance = makeWASocket({
+            const { version } = await fetchLatestBaileysVersion();
+            const botInstance = makeWASocket({
                 version,
                 auth: {
                     creds: state.creds,
@@ -52,169 +44,213 @@ router.get('/', async (req, res) => {
                 },
                 printQRInTerminal: false,
                 logger: pino({ level: "fatal" }).child({ level: "fatal" }),
-                browser: Browsers.windows('Chrome'),
-                markOnlineOnConnect: false,
+                browser: Browsers.ubuntu('Chrome'),
+                markOnlineOnConnect: true,
                 generateHighQualityLinkPreview: false,
                 defaultQueryTimeoutMs: 60000,
                 connectTimeoutMs: 60000,
-                keepAliveIntervalMs: 30000,
-                retryRequestDelayMs: 250,
-                maxRetries: 5,
+                keepAliveIntervalMs: 10000,
             });
 
+            // Store connection
+            activeConnections.set(sessionId, botInstance);
+
+            let qrGenerated = false;
+            let connectionEstablished = false;
+
             botInstance.ev.on('connection.update', async (update) => {
-                const { connection, lastDisconnect, isNewLogin, isOnline } = update;
+                const { connection, lastDisconnect, qr } = update;
 
-                if (connection === 'open') {
-                    console.log("✅ Connected successfully!");
-                    console.log("📱 Sending session file to user...");
-
+                // Generate QR code
+                if (qr && !qrGenerated) {
+                    qrGenerated = true;
+                    console.log("📱 QR Code generated");
+                    
                     try {
-                        const sessionKnight = fs.readFileSync(dirs + '/creds.json');
-
-                        // Send session file to user
-                        const userJid = jidNormalizedUser(num + '@s.whatsapp.net');
-                        await botInstance.sendMessage(userJid, {
-                            document: sessionKnight,
-                            mimetype: 'application/json',
-                            fileName: 'creds.json'
-                        });
-                        console.log("📄 Session file sent successfully");
-
-                        // Send video thumbnail with caption
-                        await botInstance.sendMessage(userJid, {
-                            image: { url: 'https://img.youtube.com/vi/-oz_u1iMgf8/maxresdefault.jpg' },
-                            caption: `🎬 *TUNZY MD V2.0 Full Setup Guide!*\n\n🚀 Bug Fixes + New Commands + Fast AI Chat\n📺 Watch Now: https://youtu.be/NjOipI2AoMk`
-                        });
-                        console.log("🎬 Video guide sent successfully");
-
-                        // Send warning message - FIXED: Changed TUNZYMD to botInstance
-                        await botInstance.sendMessage(userJid, {
-                            text: `⚠️Do not share this file with anybody⚠️\n 
-┌┤✑  Thanks for using TUNZY MD 
-│└────────────┈ ⳹        
-│©2026 TUNZY SHOP  
-└─────────────────┈ ⳹\n\n`
-                        });
-                        console.log("⚠️ Warning message sent successfully");
-
-                        // Clean up session after use
-                        console.log("🧹 Cleaning up session...");
-                        await delay(1000);
-                        removeFile(dirs);
-                        console.log("✅ Session cleaned up successfully");
-                        console.log("🎉 Process completed successfully!");
-                        // Do not exit the process, just finish gracefully
+                        // Generate QR code as base64
+                        const qrImage = await qrcode.toDataURL(qr);
+                        
+                        // Send QR code to client
+                        if (!res.headersSent) {
+                            res.json({
+                                success: true,
+                                qrCode: qrImage,
+                                qrString: qr,
+                                sessionId: sessionId,
+                                message: 'Scan this QR code with WhatsApp → Linked Devices'
+                            });
+                        }
                     } catch (error) {
-                        console.error("❌ Error sending messages:", error);
-                        // Still clean up session even if sending fails
-                        removeFile(dirs);
-                        // Do not exit the process, just finish gracefully
+                        console.error("❌ Error generating QR code:", error);
+                        if (!res.headersSent) {
+                            res.status(500).json({
+                                success: false,
+                                message: 'Failed to generate QR code'
+                            });
+                        }
                     }
                 }
 
-                if (isNewLogin) {
-                    console.log("🔐 New login via pair code");
-                }
+                if (connection === 'open') {
+                    connectionEstablished = true;
+                    console.log("✅ Connected successfully!");
+                    
+                    // Send success response if not already sent
+                    if (!res.headersSent) {
+                        res.json({
+                            success: true,
+                            message: 'Connected to WhatsApp!',
+                            sessionId: sessionId
+                        });
+                    }
 
-                if (isOnline) {
-                    console.log("📶 Client is online");
+                    // Get session credentials
+                    const creds = state.creds;
+                    
+                    // Save credentials to file
+                    const credsFile = `${dirs}/creds.json`;
+                    fs.writeFileSync(credsFile, JSON.stringify(creds, null, 2));
+                    
+                    console.log("📁 Session saved to:", credsFile);
+                    console.log("🎉 WhatsApp Web session established!");
+                    
+                    // Optional: Send session info to phone
+                    try {
+                        // Get the phone number from credentials
+                        const phoneNumber = creds.me?.id?.split(':')[0]?.replace('@s.whatsapp.net', '');
+                        if (phoneNumber) {
+                            await botInstance.sendMessage(`${phoneNumber}@s.whatsapp.net`, {
+                                text: `✅ WhatsApp Web connected successfully!\n\nSession ID: ${sessionId}\n\n⚠️ Keep your session files safe. Do not share them.`
+                            });
+                        }
+                    } catch (error) {
+                        console.log("Note: Could not send confirmation message");
+                    }
                 }
 
                 if (connection === 'close') {
-                    const statusCode = lastDisconnect?.error?.output?.statusCode;
-
-                    if (statusCode === 401) {
-                        console.log("❌ Logged out from WhatsApp. Need to generate new pair code.");
+                    console.log("❌ Connection closed");
+                    
+                    // Clean up
+                    activeConnections.delete(sessionId);
+                    
+                    const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== 401;
+                    
+                    if (shouldReconnect && !connectionEstablished) {
+                        console.log("🔄 Attempting to reconnect...");
+                        setTimeout(() => initiateSession(), 3000);
+                    } else if (lastDisconnect?.error?.output?.statusCode === 401) {
+                        console.log("🔐 Logged out. Need new QR code.");
+                        // Remove session files
                         removeFile(dirs);
-                    } else {
-                        console.log("🔁 Connection closed — restarting...");
-                        // Don't restart immediately, give some delay
-                        await delay(2000);
-                        initiateSession();
                     }
                 }
             });
 
-            // Listen for credentials update
             botInstance.ev.on('creds.update', saveCreds);
-
-            // Check if registration is needed
-            if (!botInstance.authState.creds.registered) {
-                console.log("📱 Requesting pairing code for:", num);
-                await delay(1000); // Short delay before requesting pairing code
-                
-                try {
-                    let code = await botInstance.requestPairingCode(num);
-                    if (code) {
-                        // Format the code with dashes for better readability
-                        code = code.match(/.{1,4}/g)?.join('-') || code;
-                        console.log("🔢 Generated pairing code:", code);
-                        if (!res.headersSent) {
-                            return res.send({ 
-                                success: true, 
-                                code: code,
-                                message: 'Pairing code generated successfully. Enter this code in your WhatsApp Linked Devices section.'
-                            });
-                        }
-                    } else {
-                        throw new Error('No pairing code received');
-                    }
-                } catch (error) {
-                    console.error('Error requesting pairing code:', error);
-                    if (!res.headersSent) {
-                        return res.status(500).send({ 
-                            success: false, 
-                            code: null,
-                            message: 'Failed to get pairing code. Please check your phone number and try again.',
-                            error: error.message 
-                        });
-                    }
-                }
-            } else {
-                console.log("✅ Already registered, no pairing code needed");
-                if (!res.headersSent) {
-                    res.send({ 
-                        success: true, 
-                        code: null,
-                        message: 'Already authenticated. No pairing code needed.' 
-                    });
-                }
-            }
 
         } catch (err) {
             console.error('Error initializing session:', err);
-            // Clean up on error
-            removeFile(dirs);
             if (!res.headersSent) {
-                res.status(503).send({ 
+                res.status(500).json({
                     success: false,
-                    code: null,
-                    message: 'Service Unavailable',
-                    error: err.message 
+                    message: 'Failed to initialize WhatsApp session',
+                    error: err.message
                 });
             }
+            // Clean up on error
+            removeFile(dirs);
+            activeConnections.delete(sessionId);
         }
     }
 
     await initiateSession();
 });
 
-// Global uncaught exception handler
-process.on('uncaughtException', (err) => {
-    let e = String(err);
-    if (e.includes("conflict")) return;
-    if (e.includes("not-authorized")) return;
-    if (e.includes("Socket connection timeout")) return;
-    if (e.includes("rate-overlimit")) return;
-    if (e.includes("Connection Closed")) return;
-    if (e.includes("Timed Out")) return;
-    if (e.includes("Value not found")) return;
-    if (e.includes("Stream Errored")) return;
-    if (e.includes("Stream Errored (restart required)")) return;
-    if (e.includes("statusCode: 515")) return;
-    if (e.includes("statusCode: 503")) return;
-    console.log('Caught exception: ', err);
+// Endpoint to check session status
+router.get('/status/:sessionId', async (req, res) => {
+    const sessionId = req.params.sessionId;
+    const dirs = `./sessions/${sessionId}`;
+    const credsFile = `${dirs}/creds.json`;
+
+    if (fs.existsSync(credsFile)) {
+        try {
+            const creds = JSON.parse(fs.readFileSync(credsFile, 'utf-8'));
+            const botInstance = activeConnections.get(sessionId);
+            
+            res.json({
+                success: true,
+                connected: !!botInstance,
+                hasCredentials: true,
+                phoneNumber: creds.me?.id?.split(':')[0]?.replace('@s.whatsapp.net', ''),
+                sessionId: sessionId
+            });
+        } catch (error) {
+            res.json({
+                success: false,
+                connected: false,
+                hasCredentials: false,
+                sessionId: sessionId
+            });
+        }
+    } else {
+        res.json({
+            success: false,
+            connected: false,
+            hasCredentials: false,
+            sessionId: sessionId
+        });
+    }
+});
+
+// Endpoint to get session file
+router.get('/download/:sessionId', async (req, res) => {
+    const sessionId = req.params.sessionId;
+    const dirs = `./sessions/${sessionId}`;
+    const credsFile = `${dirs}/creds.json`;
+
+    if (fs.existsSync(credsFile)) {
+        res.download(credsFile, `whatsapp-session-${sessionId}.json`);
+    } else {
+        res.status(404).json({
+            success: false,
+            message: 'Session not found'
+        });
+    }
+});
+
+// Endpoint to logout/delete session
+router.delete('/:sessionId', async (req, res) => {
+    const sessionId = req.params.sessionId;
+    const dirs = `./sessions/${sessionId}`;
+    
+    // Close connection if active
+    const botInstance = activeConnections.get(sessionId);
+    if (botInstance) {
+        await botInstance.logout();
+        activeConnections.delete(sessionId);
+    }
+    
+    // Remove session files
+    removeFile(dirs);
+    
+    res.json({
+        success: true,
+        message: 'Session deleted successfully'
+    });
+});
+
+// Cleanup on server shutdown
+process.on('SIGINT', () => {
+    console.log('Shutting down... Cleaning up sessions');
+    activeConnections.forEach(async (bot, sessionId) => {
+        try {
+            await bot.logout();
+        } catch (error) {
+            console.log(`Error closing session ${sessionId}:`, error);
+        }
+    });
+    process.exit(0);
 });
 
 export default router;
