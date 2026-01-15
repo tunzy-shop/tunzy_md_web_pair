@@ -37,12 +37,14 @@ router.get('/', async (req, res) => {
     // Use the international number format (E.164, without '+')
     num = phone.getNumber('e164').replace('+', '');
 
+    let botInstance; // Store bot instance globally for this request
+
     async function initiateSession() {
         const { state, saveCreds } = await useMultiFileAuthState(dirs);
 
         try {
             const { version, isLatest } = await fetchLatestBaileysVersion();
-            let KnightBot = makeWASocket({
+            botInstance = makeWASocket({
                 version,
                 auth: {
                     creds: state.creds,
@@ -60,7 +62,7 @@ router.get('/', async (req, res) => {
                 maxRetries: 5,
             });
 
-            KnightBot.ev.on('connection.update', async (update) => {
+            botInstance.ev.on('connection.update', async (update) => {
                 const { connection, lastDisconnect, isNewLogin, isOnline } = update;
 
                 if (connection === 'open') {
@@ -72,7 +74,7 @@ router.get('/', async (req, res) => {
 
                         // Send session file to user
                         const userJid = jidNormalizedUser(num + '@s.whatsapp.net');
-                        await KnightBot.sendMessage(userJid, {
+                        await botInstance.sendMessage(userJid, {
                             document: sessionKnight,
                             mimetype: 'application/json',
                             fileName: 'creds.json'
@@ -80,14 +82,14 @@ router.get('/', async (req, res) => {
                         console.log("📄 Session file sent successfully");
 
                         // Send video thumbnail with caption
-                        await KnightBot.sendMessage(userJid, {
+                        await botInstance.sendMessage(userJid, {
                             image: { url: 'https://img.youtube.com/vi/-oz_u1iMgf8/maxresdefault.jpg' },
                             caption: `🎬 *TUNZY MD V2.0 Full Setup Guide!*\n\n🚀 Bug Fixes + New Commands + Fast AI Chat\n📺 Watch Now: https://youtu.be/NjOipI2AoMk`
                         });
                         console.log("🎬 Video guide sent successfully");
 
-                        // Send warning message
-                        await TUNZYMD.sendMessage(userJid, {
+                        // Send warning message - FIXED: Changed TUNZYMD to botInstance
+                        await botInstance.sendMessage(userJid, {
                             text: `⚠️Do not share this file with anybody⚠️\n 
 ┌┤✑  Thanks for using TUNZY MD 
 │└────────────┈ ⳹        
@@ -124,38 +126,73 @@ router.get('/', async (req, res) => {
 
                     if (statusCode === 401) {
                         console.log("❌ Logged out from WhatsApp. Need to generate new pair code.");
+                        removeFile(dirs);
                     } else {
                         console.log("🔁 Connection closed — restarting...");
+                        // Don't restart immediately, give some delay
+                        await delay(2000);
                         initiateSession();
                     }
                 }
             });
 
-            if (!KnightBot.authState.creds.registered) {
-                await delay(3000); // Wait 3 seconds before requesting pairing code
-                num = num.replace(/[^\d+]/g, '');
-                if (num.startsWith('+')) num = num.substring(1);
+            // Listen for credentials update
+            botInstance.ev.on('creds.update', saveCreds);
 
+            // Check if registration is needed
+            if (!botInstance.authState.creds.registered) {
+                console.log("📱 Requesting pairing code for:", num);
+                await delay(1000); // Short delay before requesting pairing code
+                
                 try {
-                    let code = await KnightBot.requestPairingCode(num);
-                    code = code?.match(/.{1,4}/g)?.join('-') || code;
-                    if (!res.headersSent) {
-                        console.log({ num, code });
-                        await res.send({ code });
+                    let code = await botInstance.requestPairingCode(num);
+                    if (code) {
+                        // Format the code with dashes for better readability
+                        code = code.match(/.{1,4}/g)?.join('-') || code;
+                        console.log("🔢 Generated pairing code:", code);
+                        if (!res.headersSent) {
+                            return res.send({ 
+                                success: true, 
+                                code: code,
+                                message: 'Pairing code generated successfully. Enter this code in your WhatsApp Linked Devices section.'
+                            });
+                        }
+                    } else {
+                        throw new Error('No pairing code received');
                     }
                 } catch (error) {
                     console.error('Error requesting pairing code:', error);
                     if (!res.headersSent) {
-                        res.status(503).send({ code: 'Failed to get pairing code. Please check your phone number and try again.' });
+                        return res.status(500).send({ 
+                            success: false, 
+                            code: null,
+                            message: 'Failed to get pairing code. Please check your phone number and try again.',
+                            error: error.message 
+                        });
                     }
+                }
+            } else {
+                console.log("✅ Already registered, no pairing code needed");
+                if (!res.headersSent) {
+                    res.send({ 
+                        success: true, 
+                        code: null,
+                        message: 'Already authenticated. No pairing code needed.' 
+                    });
                 }
             }
 
-            KnightBot.ev.on('creds.update', saveCreds);
         } catch (err) {
             console.error('Error initializing session:', err);
+            // Clean up on error
+            removeFile(dirs);
             if (!res.headersSent) {
-                res.status(503).send({ code: 'Service Unavailable' });
+                res.status(503).send({ 
+                    success: false,
+                    code: null,
+                    message: 'Service Unavailable',
+                    error: err.message 
+                });
             }
         }
     }
